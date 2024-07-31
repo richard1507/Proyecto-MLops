@@ -1,6 +1,8 @@
 from fastapi import FastAPI, HTTPException
 import pandas as pd
 import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Cargar el archivo Parquet
 df = pd.read_parquet('Dataset/movies.parquet')  # Reemplaza con la ruta correcta al archivo Parquet
@@ -9,6 +11,20 @@ df = pd.read_parquet('Dataset/movies.parquet')  # Reemplaza con la ruta correcta
 # Crear una instancia de FastAPI
 app = FastAPI()
 
+# Asegúrate de que las columnas no tengan valores nulos para este caso específico
+df['overview'] = df['overview'].fillna('')  # Rellenar descripciones nulas con cadenas vacías
+
+# Inicializar el vectorizador TF-IDF
+tfidf = TfidfVectorizer(stop_words='english')
+
+# Generar la matriz TF-IDF basada en la columna 'overview'
+tfidf_matrix = tfidf.fit_transform(df['overview'])
+
+# Calcular la matriz de similitud de coseno
+cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+
+# Crear un índice de título para acceso rápido
+indices = pd.Series(df.index, index=df['title']).drop_duplicates()
 
 @app.get("/cantidad_filmaciones_mes/{mes}")
 def cantidad_filmaciones_mes(mes: str):
@@ -177,3 +193,30 @@ def get_director(nombre_director: str):
     except Exception as e:
         # Capturar errores inesperados y devolver un mensaje de error
         raise HTTPException(status_code=500, detail=str(e))
+    
+
+    @app.get("/recomendacion/{titulo}")
+def recomendacion(titulo: str):
+    # Verificar si el título existe en el índice
+    if titulo not in indices:
+        raise HTTPException(status_code=404, detail=f"La película '{titulo}' no se encuentra en el dataset.")
+
+    # Obtener el índice de la película que coincide con el título
+    idx = indices[titulo]
+
+    # Obtener las similitudes de coseno de esa película con todas las demás
+    sim_scores = list(enumerate(cosine_sim[idx]))
+
+    # Ordenar las películas basadas en la similitud de coseno (de mayor a menor)
+    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+
+    # Obtener los índices de las 5 películas más similares, ignorando la primera (que es la misma película)
+    sim_indices = [i[0] for i in sim_scores[1:6]]
+
+    # Devolver los títulos de las 5 películas más similares
+    recomendaciones = df['title'].iloc[sim_indices].tolist()
+
+    return {
+        "titulo": titulo,
+        "recomendaciones": recomendaciones
+    }
