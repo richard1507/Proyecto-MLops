@@ -195,7 +195,7 @@ def get_director(nombre_director: str):
         raise HTTPException(status_code=500, detail=str(e))
     
 
-    @app.get("/recomendacion/{titulo}")
+@app.get("/recomendacion/{titulo}")
 def recomendacion(titulo: str):
     # Verificar si el título existe en el índice
     if titulo not in indices:
