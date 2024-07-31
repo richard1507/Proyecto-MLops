@@ -15,7 +15,7 @@ app = FastAPI()
 df['overview'] = df['overview'].fillna('')  # Rellenar descripciones nulas con cadenas vacías
 
 # Reducir el tamaño de las características generadas por TF-IDF
-tfidf = TfidfVectorizer(stop_words='english', max_features=5000)
+tfidf = TfidfVectorizer(stop_words='english', max_features=2000)
 
 # Generar la matriz TF-IDF basada en la columna 'overview'
 tfidf_matrix = tfidf.fit_transform(df['overview'])
