@@ -1,222 +1,162 @@
 from fastapi import FastAPI, HTTPException
 import pandas as pd
-import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# Cargar el archivo Parquet
-df = pd.read_parquet('Dataset/movies.parquet')  # Reemplaza con la ruta correcta al archivo Parquet
-
-
-# Crear una instancia de FastAPI
+#Inicio
 app = FastAPI()
 
-# Asegúrate de que las columnas no tengan valores nulos para este caso específico
-df['overview'] = df['overview'].fillna('')  # Rellenar descripciones nulas con cadenas vacías
+#Carga de archivos .parquet para el consumo de la API
+df = pd.read_parquet("Data_Api.parquet")
+modelo = pd.read_parquet("Data_Modelo_Recomendacion.parquet")
 
-# Reducir el tamaño de las características generadas por TF-IDF
-tfidf = TfidfVectorizer(stop_words='english', max_features=1000)
 
-# Generar la matriz TF-IDF basada en la columna 'overview'
-tfidf_matrix = tfidf.fit_transform(df['overview'])
+#Ruta de inicio
+@app.get("/")
+async def index():
+    return "Api Recomendacion de peliculas"
 
-# Calcular la matriz de similitud de coseno
-cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
 
-# Crear un índice de título para acceso rápido
-indices = pd.Series(df.index, index=df['title']).drop_duplicates()
-
+#1 Ruta de cantidad de películas para un mes particular
 @app.get("/cantidad_filmaciones_mes/{mes}")
-def cantidad_filmaciones_mes(mes: str):
-    # Convertir el mes ingresado a minúsculas para asegurarnos de que la comparación sea insensible a mayúsculas/minúsculas
+async def cantidad_peliculas_mes(mes: str):
+    '''el mes en minúscula'''
     mes = mes.lower()
-
-    # Filtrar el DataFrame para contar las películas estrenadas en el mes especificado
-    cantidad = df[df['mes'].str.lower() == mes].shape[0]
-
-    # Verificar si se encontraron películas
-    if cantidad == 0:
-        raise HTTPException(status_code=404, detail=f"No se encontraron películas estrenadas en el mes '{mes}'.")
-
-    # Devolver la cantidad de películas
-    return {
-        "mes": mes,
-        "cantidad_filmaciones": cantidad
+    meses = {
+        'enero': 1, 'febrero': 2, 'marzo': 3, 'abril': 4,
+        'mayo': 5, 'junio': 6, 'julio': 7, 'agosto': 8,
+        'septiembre': 9, 'octubre': 10, 'noviembre': 11, 'diciembre': 12
     }
+    if mes not in meses:
+        raise HTTPException(status_code=400, detail=f"El mes {mes} no es válido")
+    num_mes = meses[mes]
+    cantidad = df[df['release_date'].dt.month == num_mes].shape[0]
+    return f"En el mes de {mes} se estrenaron {cantidad} películas"
 
-
+#2 Ruta de cantidad de películas para un día particular 
 @app.get("/cantidad_filmaciones_dia/{dia}")
-def cantidad_filmaciones_dia(dia: str):
-    # Convertir el día ingresado a minúsculas para asegurar que la comparación sea insensible a mayúsculas/minúsculas
+async def cantidad_peliculas_dia(dia: str):
+    '''el día en minúscula'''
     dia = dia.lower()
-
-    # Filtrar el DataFrame para contar las películas estrenadas en el día especificado
-    cantidad = df[df['dia'].str.lower() == dia].shape[0]
-
-    # Verificar si se encontraron películas
-    if cantidad == 0:
-        raise HTTPException(status_code=404, detail=f"No se encontraron películas estrenadas en el día '{dia}'.")
-
-    # Devolver la cantidad de películas
-    return {
-        "dia": dia,
-        "cantidad_filmaciones": cantidad
+    dias = {
+        'lunes': 0, 'martes': 1, 'miércoles': 2, 'jueves': 3,
+        'viernes': 4, 'sábado': 5, 'domingo': 6
     }
+    if dia not in dias:
+        raise HTTPException(status_code=400, detail=f"El día {dia} no es válido")
+    num_dia = dias[dia]
+    cantidad = df[df['release_date'].dt.weekday == num_dia].shape[0]
+    return f"En el día {dia} se estrenaron {cantidad} películas"
 
-
-
+#3 Ruta de score por título
 @app.get("/score_titulo/{titulo_de_la_filmacion}")
-def score_titulo(titulo_de_la_filmacion: str):
-    # Filtrar el DataFrame para encontrar la filmación por título
-    filmacion = df[df['title'].str.lower() == titulo_de_la_filmacion.lower()]
-
-    # Verificar si se encontró alguna filmación
-    if filmacion.empty:
-        raise HTTPException(status_code=404, detail="Filmación no encontrada")
-
-    # Extraer la información necesaria
-    titulo = filmacion.iloc[0]['title']
-    # Obtener el año de la fecha de estreno
-    anio_estreno = filmacion.iloc[0]['release_date'].year
-    score = filmacion.iloc[0]['vote_average']
-
-    # Devolver el resultado
-    return {"titulo": titulo, "anio_estreno": anio_estreno, "score": score}
-
-
-@app.get("/votos_titulo/{titulo_de_la_filmacion}")
-def votos_titulo(titulo_de_la_filmacion: str):
-    # Filtrar el DataFrame para encontrar la película con el título dado
-    pelicula = df[df['title'].str.lower() == titulo_de_la_filmacion.lower()]
-
-    # Verificar si la película fue encontrada
+async def score_titulo(titulo: str):
+    '''retorna título,año de estreno y score.'''
+    pelicula = df[df['title'].str.contains(titulo, case=False, na=False)]
     if pelicula.empty:
-        raise HTTPException(status_code=404, detail=f"Película '{titulo_de_la_filmacion}' no encontrada en el dataset.")
+        raise HTTPException(status_code=404, detail="Título no encontrado.")
+    resultado = pelicula[['title', 'release_year', 'vote_average']].to_dict(orient='records')[0]
+    return {"Título": resultado['title'], "Año": resultado['release_year'], "Score": resultado['vote_average']}
 
-    # Obtener los detalles de la película
-    votos = pelicula['vote_count'].values[0]
-    promedio_votos = pelicula['vote_average'].values[0]
-    titulo = pelicula['title'].values[0]
+#4 Ruta de votos por título
+@app.get("/votos_titulo/{titulo_de_la_filmacion}")
+async def votos_titulo(titulo: str):
+    '''título de la película'''
+    pelicula = df[df['title'].str.contains(titulo, case=False, na=False)]
+    if pelicula.empty:
+        raise HTTPException(status_code=404, detail="Título no encontrado.")
+    else:
+        year_es = int(pelicula["release_year"].iloc[0])
+        voto_tot = int(pelicula["vote_count"].iloc[0])
+        voto_prom = pelicula["vote_average"].iloc[0]
+        # Retornar el nombre del titulo ubicado en la columna title
+        titulo = pelicula["title"].iloc[0]
+        if voto_tot >= 2000:
+            # muestra los datos
+            return {
+                'Título de la película': titulo, 
+                 'Año': year_es, 
+                 'Voto total': voto_tot, 
+                 'Voto promedio': voto_prom
+            }
+        else:
+            # En caso de que la cantidad de votos sea menor a 2000
+            return f"La película {titulo} no cumple con las condiciones "
+        
 
-    # Verificar si la cantidad de votos es al menos 2000
-    if votos < 2000:
-        raise HTTPException(status_code=400, detail=f"La película '{titulo}' no cumple con la cantidad mínima de 2000 valoraciones.")
 
-    # Devolver el resultado
-    return {
-        "titulo": titulo,
-        "cantidad_votos": votos,
-        "promedio_votos": promedio_votos
-    }
-
-
+#5 Ruta para obtener información de un actor
 @app.get("/get_actor/{nombre_actor}")
-def get_actor(nombre_actor: str):
-    # Normalizar el nombre del actor para búsqueda insensible a mayúsculas
-    nombre_actor = nombre_actor.lower()
-
-    # Filtrar el DataFrame para encontrar las películas en las que el actor ha participado
-    def actor_in_cast(cast_array):
-        # Asegurarse de que cast_array sea un numpy.ndarray y manejar errores
-        if isinstance(cast_array, np.ndarray):
-            return nombre_actor in [actor.lower() for actor in cast_array]
-        return False
-
-    # Usar la función 'apply' para filtrar el DataFrame
-    filmaciones_actor = df[df['cast'].apply(actor_in_cast)]
-
-    # Verificar si se encontró alguna participación
-    if filmaciones_actor.empty:
-        raise HTTPException(status_code=404, detail=f"Actor '{nombre_actor}' no encontrado o sin participaciones en el dataset.")
-
-    # Calcular el revenue total, cantidad de películas, y promedio de revenue
-    revenue_total = filmaciones_actor['revenue'].sum()
-    cantidad_peliculas = len(filmaciones_actor)
-    promedio_revenue = revenue_total / cantidad_peliculas if cantidad_peliculas > 0 else 0
-
-    # Devolver el resultado
+async def get_actor(nombre_actor: str):
+    '''ingrese el nombre de un actor'''
+    actor_data = df[df['actors'].str.contains(nombre_actor, case=False, na=False)]
+    if actor_data.empty:
+        raise HTTPException(status_code=404, detail="Actor no encontrado.")
+    total_retorno = actor_data['return'].sum()
+    cantidad_peliculas = actor_data.shape[0]
+    promedio_retorno = actor_data['return'].mean() 
     return {
-        "actor": nombre_actor,
-        "cantidad_peliculas": cantidad_peliculas,
-        "revenue_total": revenue_total,
-        "promedio_revenue": promedio_revenue
+        "Actor/Actriz": nombre_actor,
+        "Cantidad de películas": cantidad_peliculas,
+        "Retorno Total": total_retorno,
+        "Retorno Promedio": promedio_retorno
     }
 
-    
-
+#6 Ruta para obtener información de un director
 @app.get("/get_director/{nombre_director}")
-def get_director(nombre_director: str):
-    try:
-        # Filtrar el DataFrame para encontrar las películas dirigidas por el director
-        def director_in_list(director_list):
-            # Verifica si director_list es un array o lista válida
-            if isinstance(director_list, np.ndarray):
-                director_list = director_list.tolist()
-            if not isinstance(director_list, list) or not director_list:
-                return False
-            return nombre_director.lower() in [director.lower() for director in director_list]
-
-        # Aplicar la función para filtrar el DataFrame
-        peliculas_director = df[df['director'].apply(director_in_list)]
-
-        # Verificar si se encontró alguna película
-        if peliculas_director.empty:
-            raise HTTPException(status_code=404, detail=f"Director '{nombre_director}' no encontrado o sin películas en el dataset.")
-
-        # Calcular el éxito del director y preparar los detalles de las películas
-        detalles_peliculas = []
-        for _, pelicula in peliculas_director.iterrows():
-            titulo = pelicula['title']
-            fecha_lanzamiento = pelicula['release_date']
-            costo = pelicula['budget']
-            ganancia = pelicula['revenue']
-            retorno_individual = ganancia - costo  # Ganancia menos el presupuesto
-
-            detalles_peliculas.append({
-                "titulo": titulo,
-                "fecha_lanzamiento": fecha_lanzamiento,
-                "retorno_individual": retorno_individual,
-                "costo": costo,
-                "ganancia": ganancia
-            })
-
-        # Calcular el retorno total del director
-        retorno_total = sum(p['retorno_individual'] for p in detalles_peliculas)
-
-        # Devolver el resultado
-        return {
-            "director": nombre_director,
-            "retorno_total": retorno_total,
-            "peliculas": detalles_peliculas
-        }
-
-    except Exception as e:
-        # Capturar errores inesperados y devolver un mensaje de error
-        raise HTTPException(status_code=500, detail=str(e))
-    
-
-@app.get("/recomendacion/{titulo}")
-def recomendacion(titulo: str):
-    # Verificar si el título existe en el índice
-    if titulo not in indices:
-        raise HTTPException(status_code=404, detail=f"La película '{titulo}' no se encuentra en el dataset.")
-
-    # Obtener el índice de la película que coincide con el título
-    idx = indices[titulo]
-
-    # Obtener las similitudes de coseno de esa película con todas las demás
-    sim_scores = list(enumerate(cosine_sim[idx]))
-
-    # Ordenar las películas basadas en la similitud de coseno (de mayor a menor)
-    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
-
-    # Obtener los índices de las 5 películas más similares, ignorando la primera (que es la misma película)
-    sim_indices = [i[0] for i in sim_scores[1:6]]
-
-    # Devolver los títulos de las 5 películas más similares
-    recomendaciones = df['title'].iloc[sim_indices].tolist()
-
+async def get_director(nombre_director: str):
+    '''ingrese el nombre de un director'''
+    director_data = df[df['director'].str.contains(nombre_director, case=False, na=False)]
+    if director_data.empty:
+        raise HTTPException(status_code=404, detail="Director no encontrado.")
+    resultado = []
+    for index, row in director_data.iterrows():
+        resultado.append({
+            "Título de la película": row['title'],
+            "Fecha de lanzamiento": row['release_date'],
+            "Retorno": row['return'],
+            "Presupuesto": row['budget'],
+            "Ganancia": row['revenue']
+        })
+    total_retorno = director_data['return'].sum()
     return {
-        "titulo": titulo,
-        "recomendaciones": recomendaciones
+        "Director": nombre_director,
+        "Retorno Total": total_retorno,
+        "Películas": resultado
     }
+
+
+#Machine Learning
+#Se separan los géneros y se convierten en palabras individuales
+modelo['name_gen'] = modelo['name_gen'].fillna('').apply(lambda x: ' '.join(x.replace(',', ' ').replace('-', '').lower().split()))
+#Se separan los slogans y se convierten en palabras individuales
+modelo['tagline'] = modelo['tagline'].fillna('').apply(lambda x: ' '.join(x.replace(',', ' ').replace('-', '').lower().split()))
+#Se crea una instancia de la clase TfidfVectorizer 
+tfidf_5 = TfidfVectorizer(stop_words="english", ngram_range=(1, 2))
+#Aplicar la transformación TF-IDF y obtener matriz numérica
+tfidf_matriz_5 = tfidf_5.fit_transform(modelo['name_gen'] + ' ' + modelo['tagline'] + ' ' + modelo['first_actor']+ ' ' + modelo['first_director'])
+#Función para obtener recomendaciones
+@app.get("/recomendacion/{titulo}")
+async def recomendacion(titulo):
+    '''ingrese el título de la película,Primeras letras mayuscula'''
+    #Crear una serie que asigna un índice a cada título de las películas
+    indices = pd.Series(modelo.index, index=modelo['title']).drop_duplicates()
+    if titulo not in indices:
+        return 'La película ingresada no se encuentra en la base de datos'
+    else:
+        #Obtener el índice de la película que coincide con el título
+        ind = pd.Series(indices[titulo]) if titulo in indices else None
+        #Si el título de la película está duplicado, devolver el índice de la primera aparición del título en el DataFrame
+        if modelo.duplicated(['title']).any():
+            primer_ind = modelo[modelo['title'] == titulo].index[0]
+            if not ind.equals(pd.Series(primer_ind)):
+                ind = pd.Series(primer_ind)
+        #Calcular la similitud coseno entre la película de entrada y todas las demás películas en la matriz de características
+        cosine_sim = cosine_similarity(tfidf_matriz_5[ind], tfidf_matriz_5).flatten()
+        simil = sorted(enumerate(cosine_sim), key=lambda x: x[1], reverse=True)[1:6]
+        #Verificar que los índices obtenidos son válidos
+        valid_ind = [i[0] for i in simil if i[0] < len(modelo)]
+        #Obtener los títulos de las películas más similares utilizando el índice de cada película
+        recomendaciones = modelo.iloc[valid_ind]['title'].tolist()
+        #Devolver la lista de títulos de las películas recomendadas
+        return recomendaciones
